@@ -12,7 +12,7 @@ go语言的http服务是如何被搭建的，可以用几句话大概描述
 
 
 
-### ① 基本概念
+### 1. 基本概念
 
 为了便于理解，本文约定了如下规则
 
@@ -43,7 +43,7 @@ go语言的http服务是如何被搭建的，可以用几句话大概描述
   ```
 
 
-* handler处理器：经由`http.HandlerFunc`结构体封装后的`handler函数`，其具特点：由于它实现了`ServeHTTP方法`，因此它时一个`handler对象`，如：
+* handler处理器：经由`http.HandlerFunc`结构体封装后的`handler函数`，其具特点：由于它实现了`ServeHTTP方法`，因此它是一个`handler对象`，如：
 
   ```go
   func text(w http.ResponseWriter, req *http.Request) {
@@ -103,11 +103,11 @@ go语言的http服务是如何被搭建的，可以用几句话大概描述
   }
   ```
 
-  server结构存储了服务器处理请求常见的字段 ，也包含了一个`Handler`，如果Server没有提供Handler对象，那么会默认使用`  DefautServeMux `做路由
+  server结构存储了服务器处理请求常见的字段 ，也包含了一个`Handler`，如果Server没有提供Handler对象，那么会默认使用`  DefautServeMux `做路由（这个在后面serverHandler.ServeHTTP方法中可以体现)
 
 
 
-### ② 源码解析
+### 2. 源码解析
 
 下面是一个最简单的http服务器，接下来会结合源码解析分析http服务器是如何工作的:
 
@@ -128,7 +128,7 @@ func main() {
 
 
 
-#### 1. 如何完成路由注册
+#### ① 如何完成路由注册
 
 路由注册
 
@@ -182,7 +182,7 @@ func (mux *ServeMux) Handle(pattern string, handler Handler) {
 
 
 
-#### 2. 启动服务并开启监听
+#### ② 启动服务并开启监听
 
 ```go
 http.ListenAndServe("127.0.0.0:8000", nil)
@@ -237,7 +237,7 @@ func (c *conn) serve(ctx context.Context) {
 }
 ```
 
-serverHandler里面存储了一个上面介绍的Server结构，同时它也实现了Handler接口方法ServeHTTP，并在该接口方法中做了一个重要的事情，初始化multiplexer路由多路复用器。如果server对象没有指定Handler，则使用默认的DefaultServeMux作为路由Multiplexer。并调用初始化Handler的ServeHTTP方法
+serverHandler里面存储了一个上面介绍的Server结构，同时它也实现了Handler接口方法ServeHTTP，并在该接口方法中做了一个重要的事情，初始化multiplexer路由多路复用器（如果server对象没有指定Handler，则使用默认的DefaultServeMux作为路由Multiplexer），并调用ServeMux的ServeHTTP方法
 
 ```go
 type serverHandler struct {
@@ -268,17 +268,19 @@ func (mux *ServeMux) ServeHTTP(w ResponseWriter, r *Request) {
 		return
 	}
 	h, _ := mux.Handler(r)
+    
+    // 这里对应本例的IndexHandler.ServeHTTP(w, r)，也就是自己调用自己（因为使用了http.HandlerFunc封装）
 	h.ServeHTTP(w, r)
 }
 ```
 
 后续的处理过程是，ServeMux的ServeHTTP方法调用其Handler方法寻找注册到路由上的handler对象，并调用该函数的ServeHTTP方法(本例则是IndexHandler函数)，response写到http.RequestWirter对象返回给客户端。
 
-上述函数运行结束即`serverHandler{c.server}.ServeHTTP(w, w.req)`运行结束。接下来就是对请求处理完毕之后上希望和连接断开的相关逻辑。
+上述函数运行结束即`serverHandler{c.server}.ServeHTTP(w, w.req)`运行结束。接下来就是对请求处理完毕和连接断开的相关逻辑。
 
 
 
-#### 3. 稍微把例子复杂化
+#### ③ 稍微把例子复杂化
 
 其实在上面的源码中模块帮我们省略了很多代码，稍微把它修改一下：
 
@@ -296,9 +298,20 @@ func main() {
 }
 ```
 
-在原来的代码基础上我们修改了部分代码，这里并没有使用http.HandleFunc注册路由，而是**直接使用了ServeMux注册路由**，并且我们在启动监听的时候把mux当成参数传入了 http.ListenAndServe，这是因为ServeMux在模块中也实现了 ServeHTTP 方法，因此也是一个handler
+在原来的代码基础上我们修改了部分代码，这里并没有使用http.HandleFunc注册路由，而是**直接使用了ServeMux注册路由**，那是因为我们http.HandleFunc其实就是使用默认的DefaultServeMux，并在此路由上进行注册
 
-还记得上面serverHandler的ServeHTTP 吗，我们的mux其实就是传入到了它的handler，因此如果我们没有新建一个ServeMux的话，它会帮我们使用默认的DefaultServeMux作为路由并从中查找我们对应的KV
+```go
+func (mux *ServeMux) HandleFunc(pattern string, handler func(ResponseWriter, *Request)) {
+	if handler == nil {
+		panic("http: nil handler")
+	}
+	mux.Handle(pattern, HandlerFunc(handler))
+}
+```
+
+我们在启动监听的时候把mux当成参数传入了 http.ListenAndServe，这是因为ServeMux在模块中也实现了 ServeHTTP 方法，因此也是一个handler
+
+还记得上面serverHandler的ServeHTTP 吗，我们的mux其实就是传入到了它的handler，因此如果我们没有新建一个ServeMux的话，它会帮我们使用默认的DefaultServeMux作为路由并从中查找我们对应的pattern和handler的对应关系
 
 既然我们可以直接新建ServeMux注册路由，当然我们也可以**自定义一个Server对象**
 
@@ -323,7 +336,7 @@ func main(){
 
 
 
-#### 4. 小结
+#### ④ 小结
 
 从上面例子我们可以看到：
 
@@ -334,7 +347,7 @@ func main(){
 
 ## 二、中间件Middleware
 
-### ① 如何实现中间件
+### 1. 如何实现中间件
 
 所谓中间件，就是连接上下级不同功能的函数或组件，在这里通常指的是包裹函数行为，为被包裹的函数提供一些额外的功能。在上面介绍的http.HandlerFunc就是把签名为`func(w http.ResponseWriter, req *http.Request)`的函数包裹成一个handler
 
@@ -404,9 +417,9 @@ func main() {
 
 
 
-### ②  cookie和session在HTTP中的应用
+### 2. cookie和session在HTTP中的应用
 
-上一小节学习了如何在一个HTTP请求中附加一些格外功能，在这一小节我们将会讲述如何在HTTP中使用cookie和session，下面代码中未定义的函数我们无需在意它的具体实现，只需要根据函数名称知道它做什么即可
+上一小节学习了如何在一个HTTP请求中附加一些格外功能，在这一小节我们将会讲述如何在HTTP中使用cookie和session，**下面代码中未定义的函数我们无需在意它的具体实现，只需要根据函数名称知道它做什么即可**
 
 对于一个购物网站说，一般都会需要进行用户登录后才可以下单购物，在这里我们也不例外，我们提供了用户登录的功能：
 
@@ -418,7 +431,7 @@ func main() {
 }
 ```
 
-大概的用户登录逻辑实现如下，首先我们确保用户输入的用户信息校验无误，确认无误后，我们生成一个用于保存token的cookie，之后每一次用户请求都会带上这个名称为remember-me-token的cookie：
+大概的用户登录逻辑实现如下，首先我们确保用户输入的用户信息校验无误，确认无误后，我们生成一个用于保存token的cookie，**保存在浏览器上**，之后每一次用户请求都会带上这个名称为remember-me-token的cookie：
 
 ```go
 // 这里的store是用于存储session的
@@ -468,7 +481,7 @@ func Login(w http.Response, req *http.Request) {
 }
 ```
 
-我们可以看到，在上面的Login函数中也是用了session，其中session的作用是**在服务器上记录用户登录信息**，这里的用户登记信息为用户名和用户ID，其中生成session的方法如下：
+我们可以看到，在上面的Login函数中也是用了session，其中session的作用是**在服务器上记录用户登录信息**，这里我们的session保存了其登录时候使用的用户名和用户ID，其中生成session的方法如下：
 
 ```go
 func GetSession(w http.Response, req *http.Request) *session.Session {
@@ -488,6 +501,7 @@ func GetSession(w http.Response, req *http.Request) *session.Session {
     
 	// 没有id说明是新session
 	if ses.ID == "" {
+        // 在这个例子中，我们把session也保存在了cookie当中
 		cookie := &http.Cookie{
 			Name: sID,
 			Value: sID,
@@ -519,7 +533,7 @@ func main() {
 ```go
 func AuthWrapperHandler(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-        // 从req中获取cookie，里面存储着我们的token
+        // 从req中获取cookie，里面存储着我们的token，根据这个cookie名称查找
         ck, _ := req.Cookie("remember-me-token")
         
         if ck == nil {
@@ -574,7 +588,7 @@ func AuthWrapperHandler(next http.Handler) http.Handler {
 
 
 
-### ③ 小结
+### 3. 小结
 
 从上面示例代码可以总结出：
 
@@ -590,3 +604,7 @@ func AuthWrapperHandler(next http.Handler) http.Handler {
 [2. Golang构建HTTP服务（二）--- net/http库源码笔记]( https://www.jianshu.com/p/16210100d43d )
 
 [3. 彻底弄懂session、cookie、token]( https://segmentfault.com/a/1190000017831088?utm_source=tag-newest )
+
+
+
+## 四、TO BE CONTINUE
